@@ -1,5 +1,5 @@
 import React from "react";
-import { Box, Paper } from "@mui/material";
+import { Box } from "@mui/material";
 import SessionHeader from "./SessionHeader";
 import MessageList from "./MessageList";
 import MessageInput from "./MessageInput";

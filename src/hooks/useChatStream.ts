@@ -1,75 +1,131 @@
-import { useCallback } from 'react';
-import { useChatStore } from '../store/chatStore';
+import { useCallback, useRef } from 'react';
+import { useChatStore, addMessageWithId } from '../store/chatStore';
 import { useSessionStore } from '../store/sessionStore';
 import { sendMessage } from '../api/chatApi';
 
 export function useChatStream() {
-  const conversationId = useSessionStore((state) => state.conversationId);
-  const addMessage = useChatStore((state) => state.addMessage);
-  const updateLastMessage = useChatStore((state) => state.updateLastMessage);
-  const setLoading = useChatStore((state) => state.setLoading);
-  const setError = useChatStore((state) => state.setError);
-  const setSuggestions = useChatStore((state) => state.setSuggestions);
+  const conversationId = useSessionStore((s) => s.conversationId);
+  const setLoading = useChatStore((s) => s.setLoading);
+  const setError = useChatStore((s) => s.setError);
+  const setSuggestions = useChatStore((s) => s.setSuggestions);
+  const updateMessageById = useChatStore((s) => s.updateMessageById);
+  const appendToMessageAnswer = useChatStore((s) => s.appendToMessageAnswer);
+  const appendPlanToMessage = useChatStore((s) => s.appendPlanToMessage);
+
+  const buffersRef = useRef<Map<string, string>>(new Map());
+  const controllerRef = useRef<AbortController | null>(null);
 
   const send = useCallback(
     (question: string) => {
-      const userMsgId = Date.now().toString();
-  addMessage({ id: userMsgId, sender: 'user', question });
+      if (controllerRef.current) {
+        try {
+          controllerRef.current.abort();
+        } catch (_) {}
+        controllerRef.current = null;
+      }
+
+      const userMsgId = addMessageWithId({ sender: 'user', question });
       setLoading(true);
       setError(null);
+
       if (!conversationId) {
-        // No session, stream polite LLM response character by character
-        const politeMsg = 'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.';
-        const llmMsgId = (Date.now() + 1).toString();
-  addMessage({ id: llmMsgId, sender: 'llm', answer: '', isStreaming: true });
+        const politeMsg =
+          'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.';
+        const llmMsgId = addMessageWithId({ sender: 'llm', answer: '', isStreaming: true });
+        buffersRef.current.set(llmMsgId, '');
+
         let i = 0;
         const stream = () => {
           i++;
-          updateLastMessage({ answer: politeMsg.slice(0, i) });
+          const partial = politeMsg.slice(0, i);
+          buffersRef.current.set(llmMsgId, partial);
+          updateMessageById(llmMsgId, { answer: partial, isStreaming: i < politeMsg.length });
           if (i < politeMsg.length) {
-            setTimeout(stream, 15); // stream speed
+            setTimeout(stream, 15);
           } else {
-            updateLastMessage({ isStreaming: false });
+            buffersRef.current.delete(llmMsgId);
             setLoading(false);
           }
         };
         stream();
         return;
       }
-      const llmMsgId = (Date.now() + 1).toString();
-  addMessage({ id: llmMsgId, sender: 'llm', answer: '', isStreaming: true });
+
+      const llmMsgId = addMessageWithId({ sender: 'llm', answer: '', isStreaming: true });
+      buffersRef.current.set(llmMsgId, '');
+
+      const controller = new AbortController();
+      controllerRef.current = controller;
+
       sendMessage(
         conversationId,
         question,
         (data) => {
+          if (controller.signal.aborted) return;
+
           if (data.error) {
             setError(data.error);
-            updateLastMessage({
-              answer: data.error,
-              isStreaming: false,
-            });
+            updateMessageById(llmMsgId, { answer: data.error, isStreaming: false });
+            buffersRef.current.delete(llmMsgId);
             setLoading(false);
+            controllerRef.current = null;
             return;
           }
-          updateLastMessage({
-            answer: data.answer,
-            plan: data.plan,
-            suggestions: data.suggestions,
-            isStreaming: false,
-          });
-          setSuggestions(data.suggestions || []);
+
+          const incoming = data.answer ?? '';
+          const bufMap = buffersRef.current;
+          const currentBuffer = bufMap.get(llmMsgId) ?? '';
+
+          let newBuffer: string;
+          if (!incoming) {
+            newBuffer = currentBuffer;
+          } else if (currentBuffer.length > 0 && incoming.startsWith(currentBuffer)) {
+            newBuffer = incoming; // cumulative
+          } else {
+            const sep = currentBuffer && !currentBuffer.endsWith('\n') ? ' ' : '';
+            newBuffer = currentBuffer + (sep + incoming); // delta append
+          }
+
+          bufMap.set(llmMsgId, newBuffer);
+
+          // update accumulated answer
+          updateMessageById(llmMsgId, { answer: newBuffer, isStreaming: !data.finalChunk });
+
+          // append plan entry if provided and different from last appended
+          if (data.plan) {
+            appendPlanToMessage(llmMsgId, data.plan);
+          }
+
+          if (data.finalChunk) {
+            updateMessageById(llmMsgId, { suggestions: data.suggestions, isStreaming: false });
+            setSuggestions(data.suggestions || []);
+            bufMap.delete(llmMsgId);
+            setLoading(false);
+            controllerRef.current = null;
+          }
         },
-        () => {
-          setError('Failed to get response');
-          updateLastMessage({
-            answer: 'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.',
+        (err) => {
+          if (controller.signal.aborted) {
+            updateMessageById(llmMsgId, { isStreaming: false });
+            buffersRef.current.delete(llmMsgId);
+            setLoading(false);
+            controllerRef.current = null;
+            return;
+          }
+          setError(err?.message ?? 'Failed to get response');
+          updateMessageById(llmMsgId, {
+            answer:
+              'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.',
             isStreaming: false,
           });
+          buffersRef.current.delete(llmMsgId);
           setLoading(false);
-        }
+          controllerRef.current = null;
+        },
+        controller.signal
       );
     },
-    [conversationId, addMessage, updateLastMessage, setLoading, setError, setSuggestions]
+    [conversationId, setLoading, setError, setSuggestions, updateMessageById, appendToMessageAnswer, appendPlanToMessage]
   );
 
   return {

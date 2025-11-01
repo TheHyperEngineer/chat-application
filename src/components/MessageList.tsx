@@ -1,5 +1,5 @@
 import React from "react";
-import { List, ListItem, ListItemText, Typography, Box } from "@mui/material";
+import { List, ListItem, Typography, Box } from "@mui/material";
 import { useChatStore } from "../store/chatStore";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faUser, faRobot } from "@fortawesome/free-solid-svg-icons";
@@ -40,11 +40,15 @@ const MessageList: React.FC = () => {
               <Typography variant="body1">
                 {isUser ? msg.question : msg.answer}
               </Typography>
-              {msg.plan && msg.sender === "llm" && (
+              {msg.sender === "llm" && (msg.planHistory?.length ? (
                 <Typography variant="caption" color="text.secondary">
-                  Plan: {msg.plan}
+                    Plan: {msg.planHistory.join(' → ')}
                 </Typography>
-              )}
+                ) : msg.plan ? (
+                <Typography variant="caption" color="text.secondary">
+                    Plan: {msg.plan}
+                </Typography>
+                ) : null)}
             </Box>
             {!isUser && (
               <Box ml={2} mt={0.5}>

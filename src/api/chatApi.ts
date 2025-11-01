@@ -9,6 +9,7 @@ export interface ChatResponse {
   suggestions?: string[];
   error?: string;
   code?: string;
+  finalChunk?: boolean; // added: indicates this is the last chunk
 }
 
 export interface Session {
@@ -47,23 +48,30 @@ export async function sendMessage(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    while (true) {
+    let shouldContinue = true;
+
+    while (shouldContinue) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let lines = buffer.split('\n');
       buffer = lines.pop() || '';
       for (const line of lines) {
-        if (line.trim()) {
-          try {
-            const data: ChatResponse = JSON.parse(line);
-            onMessage(data);
-          } catch (e) {
-            // Ignore malformed lines
+        if (!line.trim()) continue;
+        try {
+          const data: ChatResponse = JSON.parse(line);
+          onMessage(data);
+          if (data.finalChunk) {
+            // stop reading further — this is the last chunk
+            shouldContinue = false;
+            break;
           }
+        } catch (e) {
+          // Ignore malformed lines
         }
       }
     }
+
     if (buffer.trim()) {
       try {
         const data: ChatResponse = JSON.parse(buffer);
