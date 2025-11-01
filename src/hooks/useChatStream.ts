@@ -14,14 +14,14 @@ export function useChatStream() {
   const send = useCallback(
     (question: string) => {
       const userMsgId = Date.now().toString();
-      addMessage({ id: userMsgId, sender: 'user', question });
+  addMessage({ id: userMsgId, sender: 'user', question });
       setLoading(true);
       setError(null);
       if (!conversationId) {
         // No session, stream polite LLM response character by character
         const politeMsg = 'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.';
         const llmMsgId = (Date.now() + 1).toString();
-        addMessage({ id: llmMsgId, sender: 'llm', answer: '', isStreaming: true });
+  addMessage({ id: llmMsgId, sender: 'llm', answer: '', isStreaming: true });
         let i = 0;
         const stream = () => {
           i++;
@@ -36,11 +36,21 @@ export function useChatStream() {
         stream();
         return;
       }
-      addMessage({ id: (Date.now() + 1).toString(), sender: 'llm', answer: '', isStreaming: true });
+      const llmMsgId = (Date.now() + 1).toString();
+  addMessage({ id: llmMsgId, sender: 'llm', answer: '', isStreaming: true });
       sendMessage(
         conversationId,
         question,
         (data) => {
+          if (data.error) {
+            setError(data.error);
+            updateLastMessage({
+              answer: data.error,
+              isStreaming: false,
+            });
+            setLoading(false);
+            return;
+          }
           updateLastMessage({
             answer: data.answer,
             plan: data.plan,
@@ -49,7 +59,7 @@ export function useChatStream() {
           });
           setSuggestions(data.suggestions || []);
         },
-        (_err) => {
+        () => {
           setError('Failed to get response');
           updateLastMessage({
             answer: 'Sorry, the chat UI is not connected to the backend service at the moment. Please try again later.',
@@ -57,7 +67,7 @@ export function useChatStream() {
           });
           setLoading(false);
         }
-      ).then(() => setLoading(false));
+      );
     },
     [conversationId, addMessage, updateLastMessage, setLoading, setError, setSuggestions]
   );
