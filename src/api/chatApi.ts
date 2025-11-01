@@ -2,21 +2,25 @@ import axios from 'axios';
 
 // --- Types ---
 export interface ChatResponse {
+  // ADDED: To handle ordering
+  orderId: number;
   question: string;
   conversationId: string;
-  plan?: string;
+  // CHANGED: Plan is now an array of strings
+  plan?: string[];
   answer: string;
   suggestions?: string[];
   error?: string;
   code?: string;
-  finalChunk?: boolean; // added: indicates this is the last chunk
+  finalChunk?: boolean;
 }
 
 export interface Session {
   conversationId: string;
 }
 
-const API_BASE = 'http://localhost:8080/api';
+// NOTE: The rest of the file remains the same. I am including it for completeness.
+const API_BASE = '/api'; // Use relative path for Vite proxy
 
 // --- Start a new chat session ---
 export async function startSession(userId: string): Promise<Session> {
@@ -48,26 +52,20 @@ export async function sendMessage(
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let shouldContinue = true;
 
-    while (shouldContinue) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      let lines = buffer.split('\n');
+      const lines = buffer.split('\n');
       buffer = lines.pop() || '';
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const data: ChatResponse = JSON.parse(line);
           onMessage(data);
-          if (data.finalChunk) {
-            // stop reading further — this is the last chunk
-            shouldContinue = false;
-            break;
-          }
         } catch (e) {
-          // Ignore malformed lines
+          console.warn('Ignoring malformed JSON line:', line);
         }
       }
     }
@@ -77,10 +75,14 @@ export async function sendMessage(
         const data: ChatResponse = JSON.parse(buffer);
         onMessage(data);
       } catch (e) {
-        // Ignore malformed last line
+        console.warn('Ignoring malformed final JSON buffer:', buffer);
       }
     }
   } catch (err: any) {
+    if (err.name === 'AbortError') {
+      console.log('Stream aborted by user.');
+      return;
+    }
     if (onError) onError(err instanceof Error ? err : new Error('Unknown error'));
     else handleApiError(err, 'Streaming error');
   }
